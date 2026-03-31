@@ -10,17 +10,13 @@
       - libssl-dev
     state: present
 
-- name: Get current Kernel-Version
-  command: uname -r
-  register: ansible_kernel
-
 - name: Install dkms and kernel-headers for batman-adv
   become: yes
   apt:
     update_cache: yes
     pkg:
       - dkms
-      - linux-kernel-headers
+      - "linux-headers-{{ ansible_kernel }}"
       - ifupdown
     state: present
 
@@ -42,6 +38,24 @@
     target: scripts
     chdir: /usr/src/linux-headers-{{ansible_kernel}}
   ignore_errors: yes
+  changed_when: false
+
+- name: Remove broken batman-adv DKMS registrations
+  become: yes
+  shell: |
+    set -eu
+    shopt -s nullglob
+    for source_link in /var/lib/dkms/batman-adv/*/source; do
+      if [ -L "${source_link}" ] && [ ! -e "${source_link}" ]; then
+        rm -rf "$(dirname "${source_link}")"
+      elif [ -d "${source_link}" ] && [ ! -f "${source_link}/dkms.conf" ]; then
+        rm -rf "$(dirname "${source_link}")"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  when: batman_cleanup_broken_dkms_entries | bool
+  changed_when: false
 
 - name: Write dkms config
   become: yes
@@ -56,13 +70,34 @@
   failed_when: ret.rc != 0 and ret.rc != 3
   changed_when: ret.rc == 0
 
+- name: Remove stale DKMS install for current kernel before rebuild
+  become: yes
+  command: dkms remove -m batman-adv -v {{ batman_version }} -k {{ ansible_kernel }}
+  register: batman_dkms_remove
+  failed_when: batman_dkms_remove.rc != 0 and "is not installed" not in batman_dkms_remove.stderr
+  changed_when: batman_dkms_remove.rc == 0
+
 - name: dkms build
   become: yes
-  command: dkms build -m batman-adv -v {{batman_version}}
+  command: dkms build -m batman-adv -v {{ batman_version }} -k {{ ansible_kernel }} --force
 
 - name: dkms install
   become: yes
-  command: dkms install -m batman-adv -v {{batman_version}}
+  command: dkms install -m batman-adv -v {{ batman_version }} -k {{ ansible_kernel }} --force
+
+- name: Ensure depmod cache is current for running kernel
+  become: yes
+  command: depmod -a {{ ansible_kernel }}
+  changed_when: false
+
+- name: Inspect loaded batman-adv module
+  become: yes
+  command: modinfo batman_adv
+  register: batman_modinfo
+  changed_when: false
+  failed_when:
+    - "'version:        ' ~ batman_version not in batman_modinfo.stdout"
+    - "'vermagic:       ' ~ ansible_kernel not in batman_modinfo.stdout"
 
 - name: add module load config
   become: yes
@@ -73,11 +108,6 @@
     - batman-adv
     - br_netfilter
     - dummy
-
-- name: make sure modules can be found
-  become: yes
-  command: depmod -a
-  changed_when: false
 
 - name: load br_netfilter module
   become: yes
@@ -90,6 +120,10 @@
   modprobe:
     name: batman_adv
     state: present
+
+- name: Ensure batman mesh interface uses configured routing mode
+  become: yes
+  command: batctl ra {{ batman_protocol_mode }}
 
 - name: Install build deps of batctl
   become: yes
@@ -134,6 +168,20 @@
   become: yes
   command: batctl ra {{batman_protocol_mode}}
 
+- name: Inspect active batman routing configuration
+  become: yes
+  command: batctl ra
+  register: batman_routing_config
+  changed_when: false
+
+- name: Detect existing batman mesh interface routing mismatch
+  ansible.builtin.set_fact:
+    batman_meshif_routing_mismatch: >-
+      {{
+        ('* ' ~ ff_batman_meshif ~ ':') in batman_routing_config.stdout and
+        ('* ' ~ ff_batman_meshif ~ ': ' ~ batman_protocol_mode) not in batman_routing_config.stdout
+      }}
+
 - name: Install bridge-utils
   become: yes
   apt:
@@ -151,14 +199,74 @@
     - net.bridge.bridge-nf-call-iptables
     - net.bridge.bridge-nf-call-ip6tables
 
-- name: "add bridge interface br-{{item}}"
+- name: Recreate batman mesh interface when routing mode mismatches
+  become: yes
+  shell: |
+    set -eu
+    systemctl stop ext-respondd.service unifi_respondd.service || true
+    ifdown {{ ff_bridge_interface }} || true
+    batctl meshif {{ ff_batman_meshif }} if del {{ ff_mesh_vpn_interface }} || true
+    batctl meshif {{ ff_batman_meshif }} if del {{ ff_batman_dummy_interface }} || true
+    ip link delete {{ ff_batman_meshif }} || true
+    ip link delete {{ ff_batman_dummy_interface }} || true
+    batctl ra {{ batman_protocol_mode }}
+  args:
+    executable: /bin/bash
+  when: batman_meshif_routing_mismatch | bool
+
+- name: "add bridge interface br-{{ item }}"
   become: yes
   template:
     src: br-community-segment.j2
-    dest: "/etc/network/interfaces.d/90-br-{{item[0]}}"
+    dest: "/etc/network/interfaces.d/90-br-{{ item }}"
   vars:
-    community_segment: "{{item[0]}}"
-  loop: "{{ community_segments | list()}}"
+    community_segment: "{{ item }}"
+  loop: "{{ community_segments | list() }}"
   tags:
     - vlan
     - vlans
+
+- name: Trigger bring-up of configured Batman bridge interfaces
+  become: yes
+  shell: |
+    set -eu
+    if ifquery --state br-{{ item }} >/dev/null 2>&1; then
+      echo already-up
+      exit 0
+    fi
+    nohup ifup br-{{ item }} >/var/log/ifup-br-{{ item }}.log 2>&1 &
+    echo started
+  args:
+    executable: /bin/bash
+  register: batman_ifup
+  changed_when: "'started' in batman_ifup.stdout"
+  loop: "{{ community_segments | list() }}"
+  tags:
+    - vlan
+    - vlans
+
+- name: Wait for configured Batman bridge interfaces to exist
+  become: yes
+  command: ip link show br-{{ item }}
+  register: batman_bridge_wait
+  changed_when: false
+  retries: 15
+  delay: 1
+  until: batman_bridge_wait.rc == 0
+  loop: "{{ community_segments | list() }}"
+  tags:
+    - vlan
+    - vlans
+
+- name: Check if vxlan service is installed
+  become: yes
+  stat:
+    path: /etc/systemd/system/vxlan.service
+  register: vxlan_service_unit
+
+- name: Re-run vxlan service after batman bridge changes
+  become: yes
+  ansible.builtin.systemd:
+    name: vxlan.service
+    state: restarted
+  when: vxlan_service_unit.stat.exists

@@ -1,10 +1,24 @@
 ---
-batman_version: "2022.0"
+# Tested baseline as of 2026-04-03 on apu3faltigkeit:
+# batman-adv/batctl 2026.0, kernel 6.8.0-107-generic, BATMAN_V,
+# mesh path wg-welt -> mesh-vpn -> bat-welt -> br-welt working.
+#
+# History:
+# - 2026-03-31: 2026.0 and 2025.0 failed on kernel 6.8.0-87-generic
+# - 2026-04-03: Kernel upgrade to 6.8.0-107-generic
+# - 2026-04-03: DKMS built batman-adv/2026.0 for new kernel automatically
+# - 2026-04-03: Post-boot validation confirmed BATMAN_V working
+batman_version: "2026.0"
 batman_download_url: "https://downloads.open-mesh.org/batman/releases/batman-adv-{{batman_version}}/batman-adv-{{batman_version}}.tar.gz"
 batctl_download_url: "https://downloads.open-mesh.org/batman/releases/batman-adv-{{batman_version}}/batctl-{{batman_version}}.tar.gz"
 batman_protocol_mode: "BATMAN_V"
+ff_community_segment: "welt"
+ff_batman_meshif: "bat-{{ ff_community_segment }}"
+ff_bridge_interface: "br-{{ ff_community_segment }}"
+ff_batman_dummy_interface: "dummy-{{ ff_community_segment }}"
+ff_mesh_vpn_interface: "mesh-vpn"
 community_segments:
-  - welt
+  - "{{ ff_community_segment }}"
 outbound_lan_interface: "{{ ansible_default_ipv4.interface}}"
 inbound_lan_interface: "enp2s0"
 ff_vlan_ids:
@@ -12,3 +26,4 @@ ff_vlan_ids:
 mesh_vlan_ids:
   - 667
 additional_bridge_interfaces: []
+batman_cleanup_broken_dkms_entries: true
