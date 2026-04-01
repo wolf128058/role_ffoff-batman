@@ -164,6 +164,27 @@
     mode: '0755'
     remote_src: yes
 
+- name: Check if batctl is available
+  become: yes
+  command: which batctl
+  register: batctl_built
+  changed_when: false
+  failed_when: false
+
+- name: Fallback - install batctl via apt if build failed
+  become: yes
+  apt:
+    name: batctl
+    state: present
+  when: batctl_built.rc != 0
+
+- name: Verify batctl is available
+  become: yes
+  command: which batctl
+  register: batctl_check
+  changed_when: false
+  failed_when: batctl_check.rc != 0
+
 - name: set batman to {{batman_protocol_mode}}
   become: yes
   command: batctl ra {{batman_protocol_mode}}
