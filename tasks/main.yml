@@ -16,7 +16,7 @@
     update_cache: yes
     pkg:
       - dkms
-      - "linux-headers-{{ ansible_kernel }}"
+      - "linux-headers-{{ ansible_facts['kernel'] }}"
       - ifupdown
     state: present
 
@@ -36,7 +36,7 @@
   become: yes
   make:
     target: scripts
-    chdir: /usr/src/linux-headers-{{ansible_kernel}}
+    chdir: "/usr/src/linux-headers-{{ ansible_facts['kernel'] }}"
   ignore_errors: yes
   changed_when: false
 
@@ -72,22 +72,22 @@
 
 - name: Remove stale DKMS install for current kernel before rebuild
   become: yes
-  command: dkms remove -m batman-adv -v {{ batman_version }} -k {{ ansible_kernel }}
+  command: dkms remove -m batman-adv -v {{ batman_version }} -k {{ ansible_facts['kernel'] }}
   register: batman_dkms_remove
   failed_when: batman_dkms_remove.rc != 0 and "is not installed" not in batman_dkms_remove.stderr
   changed_when: batman_dkms_remove.rc == 0
 
 - name: dkms build
   become: yes
-  command: dkms build -m batman-adv -v {{ batman_version }} -k {{ ansible_kernel }} --force
+  command: dkms build -m batman-adv -v {{ batman_version }} -k {{ ansible_facts['kernel'] }} --force
 
 - name: dkms install
   become: yes
-  command: dkms install -m batman-adv -v {{ batman_version }} -k {{ ansible_kernel }} --force
+  command: dkms install -m batman-adv -v {{ batman_version }} -k {{ ansible_facts['kernel'] }} --force
 
 - name: Ensure depmod cache is current for running kernel
   become: yes
-  command: depmod -a {{ ansible_kernel }}
+  command: depmod -a {{ ansible_facts['kernel'] }}
   changed_when: false
 
 - name: Inspect loaded batman-adv module
@@ -97,7 +97,7 @@
   changed_when: false
   failed_when:
     - "'version:        ' ~ batman_version not in batman_modinfo.stdout"
-    - "'vermagic:       ' ~ ansible_kernel not in batman_modinfo.stdout"
+    - "'vermagic:       ' ~ ansible_facts['kernel'] not in batman_modinfo.stdout"
 
 - name: add module load config
   become: yes
