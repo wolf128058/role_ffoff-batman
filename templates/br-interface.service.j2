@@ -1,0 +1,14 @@
+[Unit]
+Description=Bring up br-{{ community_segment }} bridge interface
+After=network-online.target vxlan.service
+Wants=network-online.target
+Requires=vxlan.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/ifup br-{{ community_segment }}
+ExecStop=/sbin/ifdown br-{{ community_segment }}
+
+[Install]
+WantedBy=multi-user.target

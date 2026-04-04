@@ -291,3 +291,27 @@
     name: vxlan.service
     state: restarted
   when: vxlan_service_unit.stat.exists
+
+- name: Install systemd service for bridge interface
+  become: yes
+  template:
+    src: br-interface.service.j2
+    dest: "/etc/systemd/system/br-{{ item }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    community_segment: "{{ item }}"
+  loop: "{{ community_segments | list() }}"
+
+- name: Reload systemd daemon
+  become: yes
+  systemd:
+    daemon_reload: yes
+
+- name: Enable bridge interface service
+  become: yes
+  systemd:
+    name: "br-{{ item }}.service"
+    enabled: yes
+  loop: "{{ community_segments | list() }}"
