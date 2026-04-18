@@ -13,13 +13,3 @@ iface {{ ff_bridge_interface }} inet dhcp
         pre-up /usr/sbin/batctl meshif {{ ff_batman_meshif }} gw_mode client
         pre-up /sbin/ip link set address $(ip -br l | grep {{ outbound_lan_interface }} | egrep -o '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})' | head -1) dev {{ ff_batman_meshif }}
         post-up /sbin/ip link set address $(ip -br l | grep {{ outbound_lan_interface }} | egrep -o '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})' | head -1) dev {{ ff_bridge_interface }}
-        bridge-ports {{ ff_batman_meshif }}
-        pre-up /usr/sbin/batctl ra {{ batman_protocol_mode }}
-        pre-up /sbin/ip link show {{ ff_batman_dummy_interface }} >/dev/null 2>&1 || /sbin/ip link add {{ ff_batman_dummy_interface }} type dummy
-        pre-up /sbin/ip link set address $(ip -br l | grep {{ outbound_lan_interface }} | egrep -o '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})' | head -1) dev {{ ff_batman_dummy_interface }}
-        pre-up /sbin/ip link set {{ ff_batman_dummy_interface }} up
-        pre-up /usr/sbin/batctl meshif {{ ff_batman_meshif }} if add {{ ff_batman_dummy_interface }}
-        pre-up /sbin/ip link set {{ ff_batman_meshif }} up
-        pre-up /usr/sbin/batctl meshif {{ ff_batman_meshif }} gw_mode client
-        pre-up /sbin/ip link set address $(ip -br l | grep {{ outbound_lan_interface }} | egrep -o '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})' | head -1) dev {{ ff_batman_meshif }}
-        post-up /sbin/ip link set address $(ip -br l | grep {{ outbound_lan_interface }} | egrep -o '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})' | head -1) dev {{ ff_bridge_interface }}
