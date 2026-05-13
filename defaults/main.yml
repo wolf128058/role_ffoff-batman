@@ -12,6 +12,9 @@ batman_version: "2026.0"
 batman_download_url: "https://downloads.open-mesh.org/batman/releases/batman-adv-{{batman_version}}/batman-adv-{{batman_version}}.tar.gz"
 batctl_download_url: "https://downloads.open-mesh.org/batman/releases/batman-adv-{{batman_version}}/batctl-{{batman_version}}.tar.gz"
 batman_protocol_mode: "BATMAN_V"
+batman_prefer_in_tree_module: false
+batman_reinstall_kernel_headers: true
+batman_build_kernel_scripts: false
 ff_community_segment: "welt"
 ff_batman_meshif: "bat-{{ ff_community_segment }}"
 ff_bridge_interface: "br-{{ ff_community_segment }}"

@@ -17,8 +17,14 @@
     pkg:
       - dkms
       - "linux-headers-{{ ansible_facts['kernel'] }}"
+      - "linux-modules-extra-{{ ansible_facts['kernel'] }}"
       - ifupdown
     state: present
+
+- name: Reinstall current kernel headers for external module builds
+  become: yes
+  command: apt-get install --reinstall -y linux-headers-{{ ansible_facts['kernel'] | regex_replace('-generic$', '') }} linux-headers-{{ ansible_facts['kernel'] }}
+  when: batman_reinstall_kernel_headers | bool
 
 - name: Download and unzip batman
   become: yes
@@ -31,6 +37,7 @@
 - name: Remove missing link in Makefile
   become: yes
   shell: sed -i '/+= selinux/s/^/# /' /usr/src/linux-headers-*-generic/scripts/Makefile
+  when: batman_build_kernel_scripts | bool
 
 - name: Build batman
   become: yes
@@ -39,6 +46,7 @@
     chdir: "/usr/src/linux-headers-{{ ansible_facts['kernel'] }}"
   ignore_errors: yes
   changed_when: false
+  when: batman_build_kernel_scripts | bool
 
 - name: Remove broken batman-adv DKMS registrations
   become: yes
@@ -70,6 +78,30 @@
   failed_when: ret.rc != 0 and ret.rc != 3
   changed_when: ret.rc == 0
 
+- name: Remove other batman-adv DKMS installs for current kernel
+  become: yes
+  shell: |
+    set -eu
+    shopt -s nullglob
+    changed=0
+    for version_dir in /var/lib/dkms/batman-adv/*; do
+      version="$(basename "${version_dir}")"
+      if [ "${version}" = "{{ batman_version }}" ]; then
+        continue
+      fi
+      if dkms status -m batman-adv -v "${version}" | grep -q "{{ ansible_facts['kernel'] }}.*installed"; then
+        dkms remove -m batman-adv -v "${version}" -k {{ ansible_facts['kernel'] }}
+        changed=1
+      fi
+    done
+    if [ "${changed}" = 1 ]; then
+      echo changed
+    fi
+  args:
+    executable: /bin/bash
+  register: batman_dkms_remove_other_versions
+  changed_when: "'changed' in batman_dkms_remove_other_versions.stdout"
+
 - name: Remove stale DKMS install for current kernel before rebuild
   become: yes
   command: dkms remove -m batman-adv -v {{ batman_version }} -k {{ ansible_facts['kernel'] }}
@@ -99,13 +131,35 @@
     - "'version:        ' ~ batman_version not in batman_modinfo.stdout"
     - "'vermagic:       ' ~ ansible_facts['kernel'] not in batman_modinfo.stdout"
 
+- name: Prefer kernel-packaged batman-adv module for current kernel
+  become: yes
+  command: dkms remove -m batman-adv -v {{ batman_version }} -k {{ ansible_facts['kernel'] }}
+  register: batman_dkms_prefer_in_tree_remove
+  failed_when:
+    - batman_dkms_prefer_in_tree_remove.rc != 0
+    - "'is not installed' not in batman_dkms_prefer_in_tree_remove.stderr"
+  changed_when: batman_dkms_prefer_in_tree_remove.rc == 0
+  when: batman_prefer_in_tree_module | bool
+
+- name: Refresh depmod cache after selecting batman-adv module
+  become: yes
+  command: depmod -a {{ ansible_facts['kernel'] }}
+  changed_when: false
+  when: batman_prefer_in_tree_module | bool
+
+- name: Remove stale batman-adv module load config
+  become: yes
+  file:
+    path: /etc/modules-load.d/batman-adv.module.conf
+    state: absent
+
 - name: add module load config
   become: yes
   template:
     src: module.j2
     dest: /etc/modules-load.d/{{ item }}.module.conf
   loop:
-    - batman-adv
+    - batman_adv
     - br_netfilter
     - dummy
 
@@ -114,6 +168,19 @@
   modprobe:
     name: br_netfilter
     state: present
+
+- name: Unload mismatched batman module before loading configured version
+  become: yes
+  shell: |
+    set -eu
+    if [ -r /sys/module/batman_adv/version ] && [ "$(cat /sys/module/batman_adv/version)" != "{{ batman_version }}" ]; then
+      modprobe -r batman_adv
+      echo unloaded
+    fi
+  args:
+    executable: /bin/bash
+  register: batman_unload_mismatched_module
+  changed_when: "'unloaded' in batman_unload_mismatched_module.stdout"
 
 - name: load batman module
   become: yes
